@@ -15,7 +15,7 @@ ENV UV_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 WORKDIR /app
 
 # 复制依赖配置文件
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 
 # 安装依赖
 RUN uv sync --frozen --no-install-project --no-dev

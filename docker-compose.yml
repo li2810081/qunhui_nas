@@ -1,9 +1,8 @@
 services:
   nas-api:
-    build: .
-    container_name: nas-api
+    image: qunhuinas:latest
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:8000"
     environment:
       - NAS_HOST=${NAS_HOST:-nas242}
       - NAS_PORT=${NAS_PORT:-22}
