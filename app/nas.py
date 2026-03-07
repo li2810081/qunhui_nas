@@ -5,7 +5,6 @@ NAS操作模块
 import asyncio
 import logging
 import time
-from tkinter import N
 from typing import Optional, Tuple
 import asyncssh
 from .config import settings
