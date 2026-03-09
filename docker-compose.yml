@@ -14,3 +14,5 @@ services:
       - ALLOW_FILE_PATH=${ALLOW_FILE_PATH:-}
       - MAIL_DOMAIN=${MAIL_DOMAIN:-username.qunhui.com}
     restart: unless-stopped
+
+

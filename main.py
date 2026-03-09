@@ -68,6 +68,9 @@ class UserCreateRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=32, description="用户名")
     password: str = Field(..., min_length=4, max_length=64, description="密码")
     groups: list[str] = Field(default=[], description="用户组列表")
+    full_name: Optional[str] = Field(default=None, max_length=64, description="全名")
+    email: Optional[str] = Field(default=None, max_length=64, description="邮箱")
+    
 
 
 class UserOperationRequest(BaseModel):

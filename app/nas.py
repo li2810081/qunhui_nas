@@ -221,6 +221,47 @@ async def check_user_exists(username: str) -> bool:
     return False
 
 
+async def get_user_info(username: str) -> dict:
+    """
+    获取用户信息
+    
+    Args:
+        username: 用户名
+        
+    Returns:
+        dict: 包含 fullname, email, expired 等信息的字典
+    """
+    cmd = f"/usr/syno/sbin/synouser --get {username}"
+    stdout, stderr, exit_code = await nas_client.execute_command(cmd, use_sudo=True)
+    
+    if exit_code != 0:
+        raise NASCommandError(f"获取用户信息失败: {stderr}")
+
+    # 解析输出
+    info = {}
+    for line in stdout.split('\n'):
+        if ':' in line:
+            key, value = line.split(':', 1)
+            key = key.strip()
+            value = value.strip()
+            if key == "User gecos": # Full Name
+                # 移除 [ ]
+                if value.startswith('[') and value.endswith(']'):
+                    info['fullname'] = value[1:-1]
+            elif key == "User email":
+                if value.startswith('[') and value.endswith(']'):
+                    info['email'] = value[1:-1]
+            elif key == "User expire":
+                # [0] or [1]
+                if value.startswith('[') and value.endswith(']'):
+                    # 只有当内容是数字时才转换
+                    val_content = value[1:-1]
+                    if val_content.isdigit():
+                        info['expired'] = int(val_content)
+    
+    return info
+
+
 async def create_user(username: str, password: str, groups: list,fullname:str=None,mail:str=None) -> dict:
     """
     创建用户并分配用户组
@@ -266,10 +307,9 @@ async def create_user(username: str, password: str, groups: list,fullname:str=No
     for group in groups:
         # 修正：synogroup 命令应该是 --memberadd (注意帮助信息中是 memberadd)
         # 但根据用户提供的输出，Usage 显示的是 --memberadd，但也提示了 unrecognized option '--member_add'
-        # 仔细看 Usage: --memberadd groupname username
-        # 而之前的代码可能是 --memberadd {group} {username}
-        # 让我们确保命令格式正确
-        cmd = f"/usr/syno/sbin/synogroup --memberadd {group} {username} > /dev/null"
+        # synogroup --memberadd groupname user1 user2 ...
+        # 注意：参数顺序是 groupname username
+        cmd = f"/usr/syno/sbin/synogroup --memberadd {group} {username}"
         logger.info(f"执行命令: {cmd}")
         try:
             # 对 synogroup 命令启用重试（最多重试2次），提高成功率
@@ -301,8 +341,32 @@ async def enable_user(username: str) -> dict:
         操作结果字典
     """
     logger.info(f"启用用户: {username}")
+    
+    # 1. 检查用户是否存在
+    if not await check_user_exists(username):
+        logger.error(f"启用用户失败: 用户 {username} 不存在")
+        raise NASCommandError(f"用户 {username} 不存在")
 
-    cmd = f"/usr/syno/sbin/synouser --set_enable {username} 1"
+    # 2. 获取用户现有信息以保留 fullname 和 email
+    try:
+        user_info = await get_user_info(username)
+    except Exception as e:
+        logger.warning(f"获取用户信息失败: {e}，将使用默认值")
+        user_info = {}
+    
+    fullname = user_info.get('fullname', username)
+    email = user_info.get('email', "")
+    
+    # 3. 使用 synouser --modify 启用用户 (expired=0)
+    # 语法: synouser --modify username "full name" expired{0|1} mail
+    # 注意：help信息中没有 password 参数！
+    # --modify username "full name" expired{0|1} mail
+    # 这意味着我们不需要密码就可以修改这些信息！太棒了！
+    
+    # 转义 fullname
+    fullname_escaped = fullname.replace('"', '\\"')
+    
+    cmd = f"/usr/syno/sbin/synouser --modify {username} \"{fullname_escaped}\" 0 \"{email}\""
     stdout, stderr, exit_code = await nas_client.execute_command(cmd, use_sudo=True)
 
     if exit_code != 0:
@@ -324,8 +388,27 @@ async def disable_user(username: str) -> dict:
         操作结果字典
     """
     logger.info(f"禁用用户: {username}")
+    
+    # 1. 检查用户是否存在
+    if not await check_user_exists(username):
+        logger.error(f"禁用用户失败: 用户 {username} 不存在")
+        raise NASCommandError(f"用户 {username} 不存在")
 
-    cmd = f"/usr/syno/sbin/synouser --set_enable {username} 0"
+    # 2. 获取用户现有信息以保留 fullname 和 email
+    try:
+        user_info = await get_user_info(username)
+    except Exception as e:
+        logger.warning(f"获取用户信息失败: {e}，将使用默认值")
+        user_info = {}
+    
+    fullname = user_info.get('fullname', username)
+    email = user_info.get('email', "")
+
+    # 3. 使用 synouser --modify 禁用用户 (expired=1)
+    # 转义 fullname
+    fullname_escaped = fullname.replace('"', '\\"')
+
+    cmd = f"/usr/syno/sbin/synouser --modify {username} \"{fullname_escaped}\" 1 \"{email}\""
     stdout, stderr, exit_code = await nas_client.execute_command(cmd, use_sudo=True)
 
     if exit_code != 0:
