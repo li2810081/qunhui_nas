@@ -1,8 +1,8 @@
 # 使用 Python 3.13 基础镜像
 FROM python:3.13-slim
 
-# 安装 uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+# 安装 uv（使用官方推荐的方式）
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # 设置环境变量
 ENV UV_COMPILE_BYTECODE=1
@@ -17,8 +17,8 @@ WORKDIR /app
 # 复制依赖配置文件
 COPY pyproject.toml uv.lock ./
 
-# 安装依赖
-RUN uv sync --frozen --no-install-project --no-dev
+# 安装依赖（保留 --no-dev，移除 --no-install-project）
+RUN uv sync --frozen --no-dev
 
 # 复制源代码
 COPY . .

@@ -27,43 +27,53 @@ async def list_users() -> Dict:
     """
     return user.get_users()
 
+from pydantic import BaseModel, Field
+class UserInfo(BaseModel):
+    username: str = Field(..., min_length=1, max_length=32, description="用户名")
+    password: str = Field(..., min_length=1, max_length=32, description="密码")
+    description: str = Field(..., min_length=1, max_length=32, description="描述")
+
+class UserModifyInfo(BaseModel):
+    username: str = Field(..., min_length=1, max_length=32, description="用户名")
+
 # 新增用户
 @user_router.post("/create")
-async def create_user(username: str, password: str, description: str = None) -> Dict:
+async def create_user(user_info: UserInfo) -> Dict:
     """
     新增用户
 
     需要 token 鉴权，通过 URL 参数 ?token=YOUR_TOKEN 传递
 
     Args:
-        username: 用户名
-        password: 密码
-        description: 用户描述
+        user_info: 用户信息
 
     Returns:
         Dict: 创建结果
     """
-    return user.create_user(username, password, description)
+    user_info_dict = user_info.model_dump()
+    return user.create_user(**user_info_dict)
+
 
 # 启用用户
 @user_router.post("/enable")
-async def enable_user(username: str) -> Dict:
+async def enable_user(user_modify_info: UserModifyInfo) -> Dict:
     """
     启用用户,修改过期时间为永久
 
     需要 token 鉴权，通过 URL 参数 ?token=YOUR_TOKEN 传递
 
     Args:
-        username: 用户名
+        user_modify_info: 用户修改信息
 
     Returns:
         Dict: 操作结果
     """
+    username=user_modify_info.username
     return user.modify_user(username,username, expire="normal")
 
 # 禁用用户
 @user_router.post("/disable")
-async def disable_user(username: str) -> Dict:
+async def disable_user(user_modify_info: UserModifyInfo) -> Dict:
     """
     禁用用户,修改过期时间为当前时间
 
@@ -75,11 +85,12 @@ async def disable_user(username: str) -> Dict:
     Returns:
         Dict: 操作结果
     """
+    username = user_modify_info.username
     return user.modify_user(username, username, expire="now")
 
 # 删除用户
 @user_router.post("/delete")
-async def delete_user(username: str) -> Dict:
+async def delete_user(user_modify_info: UserModifyInfo) -> Dict:
     """
     删除用户
 
@@ -91,22 +102,28 @@ async def delete_user(username: str) -> Dict:
     Returns:
         Dict: 操作结果
     """
+    username = user_modify_info.username
     return user.delete_user(username)
 
+class UserGroupInfo(BaseModel):
+    username: str = Field(..., min_length=1, max_length=32, description="用户名")
+    groupname: str = Field(..., min_length=1, max_length=32, description="组名")
 
 # 添加用户到组
 @user_router.post("/add_to_group")
-async def add_user_to_group(username: str, groupname: str) -> Dict:
+async def add_user_to_group(user_group_info: UserGroupInfo) -> Dict:
     """
     添加用户到组
 
     需要 token 鉴权，通过 URL 参数 ?token=YOUR_TOKEN 传递
 
     Args:
-        username: 用户名
-        groupname: 组名
+        user_group_info: 用户组信息
 
     Returns:
         Dict: 操作结果
     """
+    username = user_group_info.username
+    groupname = user_group_info.groupname
+    
     return group.add_users(groupname, [username])
