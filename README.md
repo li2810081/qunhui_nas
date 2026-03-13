@@ -261,15 +261,32 @@ wget "http://localhost:8000/drive/download/home/test.txt?token=YOUR_TOKEN" \
 
 ### 搜索 API
 
-#### 1. 搜索文件
+#### 1. 通用搜索（UniversalSearch）
 ```http
-GET /search/?token=YOUR_TOKEN&query=keyword
+POST /search/?token=YOUR_TOKEN
+Content-Type: application/json
+```
+
+**请求体：**
+```json
+{
+  "keyword": "document",
+  "limit": 100
+}
 ```
 
 **参数：**
 | 参数 | 类型 | 必需 | 说明 |
 |:---|:---:|:---:|:---|
-| query | string | ✅ | 搜索关键词 |
+| keyword | string | ✅ | 搜索关键词 |
+| limit | int | ❌ | 返回结果数量（1-1000，默认100） |
+
+**示例：**
+```bash
+curl -X POST "http://localhost:8000/search/?token=YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"keyword": "test", "limit": 10}'
+```
 
 **响应示例：**
 ```json
@@ -278,8 +295,7 @@ GET /search/?token=YOUR_TOKEN&query=keyword
     "hits": [
       {
         "SYNOMDPath": "/volume1/home/document.txt",
-        "SYNOMDFSName": "document.txt",
-        "SYNOMDFSSize": "1024"
+        "SYNOMDFSName": "document.txt"
       }
     ],
     "total": 1
@@ -287,6 +303,76 @@ GET /search/?token=YOUR_TOKEN&query=keyword
   "success": true
 }
 ```
+
+#### 2. 文件搜索（FileStation）
+```http
+POST /search/file?token=YOUR_TOKEN
+Content-Type: application/json
+```
+
+**请求体：**
+```json
+{
+  "keyword": "report",
+  "folder_path": "/home",
+  "recursive": true,
+  "extension": "pdf,docx",
+  "filetype": "file",
+  "limit": 50
+}
+```
+
+**参数：**
+| 参数 | 类型 | 必需 | 说明 |
+|:---|:---:|:---:|:---|
+| keyword | string | ✅ | 搜索关键词 |
+| folder_path | string | ❌ | 搜索路径（默认"/"） |
+| recursive | bool | ❌ | 是否递归搜索（默认true） |
+| extension | string | ❌ | 文件扩展名，如"txt,pdf" |
+| filetype | string | ❌ | 文件类型：file/dir/all |
+| limit | int | ❌ | 返回结果数量（1-1000，默认100） |
+
+**示例：**
+```bash
+# 搜索所有PDF文件
+curl -X POST "http://localhost:8000/search/file?token=YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"keyword": "report", "extension": "pdf"}'
+
+# 搜索特定文件夹
+curl -X POST "http://localhost:8000/search/file?token=YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"keyword": "photo", "folder_path": "/home/Pictures"}'
+```
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "taskid": "0x1234567890abcdef",
+  "total": 2,
+  "data": {
+    "items": [
+      {
+        "path": "/home/Documents/report.pdf",
+        "name": "report.pdf",
+        "size": 1048576
+      }
+    ],
+    "finished": true
+  }
+}
+```
+
+#### 两种搜索方法对比
+
+| 特性 | UniversalSearch | FileStation |
+|:---|:---|:---|
+| **搜索范围** | 全局搜索 | 指定路径搜索 |
+| **过滤条件** | 仅关键词 | 路径、扩展名、类型、大小等 |
+| **性能** | 适合快速搜索 | 适合精确过滤 |
+| **搜索模式** | 同步 | 异步任务 |
+| **推荐场景** | 简单关键词搜索 | 复杂条件过滤 |
 
 ## 🧪 测试
 

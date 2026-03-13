@@ -59,7 +59,7 @@ async def enable_user(username: str) -> Dict:
     Returns:
         Dict: 操作结果
     """
-    return user.modify_user(username,username, expire="never")
+    return user.modify_user(username,username, expire="normal")
 
 # 禁用用户
 @user_router.post("/disable")

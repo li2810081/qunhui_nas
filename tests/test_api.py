@@ -167,14 +167,52 @@ class TestSearchAPI:
 
     @pytest.mark.asyncio
     async def test_search_files(self):
-        """测试搜索文件"""
+        """测试搜索文件（UniversalSearch）"""
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            params = {"query": "test"}
-            params.update(get_token_params())
+            # 使用 POST 方法，JSON 请求体
+            json_data = {"keyword": "test", "limit": 10}
+            params = get_token_params()
 
-            response = await client.get("/search/", params=params)
+            response = await client.post("/search/", params=params, json=json_data)
             print(f"搜索文件响应: {response.status_code}")
+            print(f"响应内容: {response.json()}")
+            assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_file_search(self):
+        """测试文件搜索（FileStation）"""
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # 使用 POST 方法，JSON 请求体
+            json_data = {
+                "keyword": "test",
+                "folder_path": "/home",
+                "recursive": True,
+                "limit": 10
+            }
+            params = get_token_params()
+
+            response = await client.post("/search/file", params=params, json=json_data)
+            print(f"文件搜索响应: {response.status_code}")
+            print(f"响应内容: {response.json()}")
+            assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_file_search_with_extension(self):
+        """测试带扩展名过滤的文件搜索"""
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            json_data = {
+                "keyword": "test",
+                "folder_path": "/home",
+                "extension": "txt",
+                "limit": 10
+            }
+            params = get_token_params()
+
+            response = await client.post("/search/file", params=params, json=json_data)
+            print(f"扩展名搜索响应: {response.status_code}")
             print(f"响应内容: {response.json()}")
             assert response.status_code == 200
 
@@ -294,9 +332,8 @@ class TestIntegration:
 
             # 5. 搜索文件
             print("\n=== 步骤5: 搜索文件 ===")
-            params = {"query": "integration"}
-            params.update(token_params)
-            search_response = await client.get("/search/", params=params)
+            json_data = {"keyword": "integration", "limit": 10}
+            search_response = await client.post("/search/", params=token_params, json=json_data)
             print(f"搜索文件: {search_response.status_code}")
             print(f"搜索结果数量: {search_response.json().get('data', {}).get('total', 0)}")
             assert search_response.status_code == 200
