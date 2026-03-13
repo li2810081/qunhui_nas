@@ -5,12 +5,19 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Virtual environments
 .venv
+venv/
+ENV/
 
 # Environment files
 .env
+.env.local
+.env.*.local
 
 # SSH private keys (DO NOT COMMIT)
 *.pem
@@ -20,3 +27,30 @@ id_ed25519
 
 # Log files
 *.log
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.egg
+
+# Testing
+.tox/
+.nox/
+
+# Documentation
+docs/_build/
+
+# Claude Code
+.claude/
+uv.lock
+uv.lock
