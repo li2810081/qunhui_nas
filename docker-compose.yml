@@ -4,15 +4,12 @@ services:
     ports:
       - "${PORT:-8000}:8000"
     environment:
-      - NAS_HOST=${NAS_HOST:-nas242}
-      - NAS_PORT=${NAS_PORT:-22}
-      - NAS_USER=${NAS_USER:-root}
-      - NAS_PASSWORD=${NAS_PASSWORD:-your_password_here}
-      - SUDO_PASSWORD=${SUDO_PASSWORD:-your_sudo_password_here}
-      - TOKEN=${TOKEN:-test_token_1}
-      - ALLOW_IP=${ALLOW_IP:-}
-      - ALLOW_FILE_PATH=${ALLOW_FILE_PATH:-}
-      - MAIL_DOMAIN=${MAIL_DOMAIN:-username.qunhui.com}
+      - TOKEN=${TOKEN}
+      - DSM_HOST=${DSM_HOST:-127.0.0.1}
+      - NAS_USER=${NAS_USER:-admin}
+      - DSM_PORT=${DSM_PORT:-5000}
+      - DSM_HTTPS=${DSM_HTTPS:-true}
+      - NAS_PASSWORD=${NAS_PASSWORD}
     restart: unless-stopped
 
 
