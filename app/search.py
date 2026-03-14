@@ -4,12 +4,18 @@
 """
 import asyncio
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
+from functools import wraps
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel, Field
 from synology_api.universal_search import UniversalSearch
 from synology_api.filestation import FileStation
-from synology_api.exceptions import UniversalSearchError, SynoBaseException
+from synology_api.exceptions import (
+    UniversalSearchError,
+    SynoBaseException,
+    SynoConnectionError,
+    LoginError
+)
 
 from .config import settings
 from .auth import require_token_auth
@@ -25,6 +31,18 @@ _search_instance = None
 
 # 全局 FileStation 实例（单例）
 _filestation_instance = None
+
+
+def reset_search_client():
+    """重置 UniversalSearch 客户端"""
+    global _search_instance
+    _search_instance = None
+
+
+def reset_filestation_client():
+    """重置 FileStation 客户端"""
+    global _filestation_instance
+    _filestation_instance = None
 
 
 def get_search_client() -> UniversalSearch:
@@ -52,6 +70,72 @@ def get_filestation_client() -> FileStation:
             interactive_output=False  # 返回字典格式而不是字符串
         )
     return _filestation_instance
+
+
+def with_auto_retry(client_reset_func: Callable):
+    """
+    装饰器：自动重试连接错误
+
+    当检测到连接或认证错误时，重置客户端并重试一次
+    """
+    def decorator(func):
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            try:
+                return await func(*args, **kwargs)
+            except (SynoConnectionError, LoginError) as e:
+                # 重置客户端并重试
+                client_reset_func()
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as retry_error:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"连接失败，请检查 NAS 配置: {str(retry_error)}"
+                    )
+            except SynoBaseException as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"NAS API 错误: {str(e)}"
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"操作失败: {str(e)}"
+                )
+
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except (SynoConnectionError, LoginError) as e:
+                # 重置客户端并重试
+                client_reset_func()
+                try:
+                    return func(*args, **kwargs)
+                except Exception as retry_error:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"连接失败，请检查 NAS 配置: {str(retry_error)}"
+                    )
+            except SynoBaseException as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"NAS API 错误: {str(e)}"
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"操作失败: {str(e)}"
+                )
+
+        # 根据函数类型返回相应的包装器
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        else:
+            return sync_wrapper
+
+    return decorator
 
 
 # 请求模型
@@ -87,9 +171,9 @@ async def search_items(request: SearchRequest) -> Dict[str, Any]:
     Raises:
         HTTPException: 搜索失败时抛出
     """
-    try:
-        search_client = get_search_client()
+    search_client = get_search_client()
 
+    try:
         # 直接使用关键词，不进行额外处理
         result = search_client.search(request.keyword)
 
@@ -111,6 +195,26 @@ async def search_items(request: SearchRequest) -> Dict[str, Any]:
             status_code=400,
             detail=f"搜索请求失败: {e}"
         )
+    except (SynoConnectionError, LoginError):
+        # 重置客户端并重试一次
+        reset_search_client()
+        search_client = get_search_client()
+        try:
+            result = search_client.search(request.keyword)
+            if isinstance(result, dict):
+                if 'data' in result and isinstance(result['data'], dict):
+                    hits = result['data'].get('hits', [])
+                    if request.limit and len(hits) > request.limit:
+                        result['data']['hits'] = hits[:request.limit]
+                        result['data']['total'] = len(hits[:request.limit])
+                return result
+            else:
+                return {"success": True, "data": result}
+        except Exception as retry_error:
+            raise HTTPException(
+                status_code=500,
+                detail=f"连接已失效，重试失败: {str(retry_error)}"
+            )
     except SynoBaseException as e:
         raise HTTPException(
             status_code=500,
@@ -216,6 +320,61 @@ async def search_files(request: FileSearchRequest) -> Dict[str, Any]:
     except HTTPException:
         # 重新抛出 HTTP 异常
         raise
+    except (SynoConnectionError, LoginError):
+        # 重置客户端并重试一次
+        reset_filestation_client()
+        file_station = get_filestation_client()
+        try:
+            # 重新执行搜索逻辑
+            search_args = {
+                "folder_path": request.folder_path,
+                "pattern": request.keyword,
+                "recursive": request.recursive
+            }
+            if request.extension:
+                search_args["extension"] = request.extension
+            if request.filetype:
+                search_args["filetype"] = request.filetype
+
+            start_result = file_station.search_start(**search_args)
+            if not isinstance(start_result, dict):
+                raise HTTPException(status_code=500, detail="搜索启动失败：返回格式错误")
+
+            taskid = str(start_result.get('taskid', ''))
+            if not taskid:
+                raise HTTPException(status_code=500, detail="搜索启动失败：未获取到任务ID")
+
+            max_wait_time = 30
+            start_time = time.time()
+            items = []
+
+            while time.time() - start_time < max_wait_time:
+                try:
+                    result = file_station.get_search_list(task_id=taskid, limit=request.limit)
+                    if isinstance(result, dict) and 'data' in result:
+                        items = result['data'].get('items', [])
+                        if items or result['data'].get('finished', False):
+                            break
+                    else:
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+
+            if request.limit and len(items) > request.limit:
+                items = items[:request.limit]
+
+            return {
+                "success": True,
+                "taskid": taskid,
+                "total": len(items),
+                "data": {"items": items, "finished": True}
+            }
+        except Exception as retry_error:
+            raise HTTPException(
+                status_code=500,
+                detail=f"连接已失效，重试失败: {str(retry_error)}"
+            )
     except SynoBaseException as e:
         raise HTTPException(
             status_code=500,
@@ -256,8 +415,9 @@ async def search_suggestions(
     if not query:
         return {"suggestions": []}
 
+    search_client = get_search_client()
+
     try:
-        search_client = get_search_client()
         result = search_client.search(query)
 
         suggestions = []
@@ -275,6 +435,27 @@ async def search_suggestions(
 
         return {"suggestions": suggestions}
 
-    except Exception as e:
-        # 搜索建议失败时返回空列表而不是抛出异常
-        return {"suggestions": [], "error": str(e)}
+    except (SynoConnectionError, LoginError):
+        # 重置客户端并重试一次
+        reset_search_client()
+        search_client = get_search_client()
+        try:
+            result = search_client.search(query)
+            suggestions = []
+            if isinstance(result, dict) and 'data' in result:
+                hits = result['data'].get('hits', [])
+                for hit in hits[:limit]:
+                    name = hit.get('SYNOMDFSName') or hit.get('SYNOMDPath', '')
+                    if name:
+                        suggestions.append({
+                            'name': name,
+                            'path': hit.get('SYNOMDPath', ''),
+                            'type': 'file' if hit.get('SYNOMDIsDir') != 'y' else 'folder'
+                        })
+            return {"suggestions": suggestions}
+        except Exception:
+            # 重试失败，返回空列表
+            return {"suggestions": []}
+    except Exception:
+        # 其他异常返回空列表
+        return {"suggestions": []}

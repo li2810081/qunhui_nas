@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     dsm_port: str = "5001"
     dsm_https: bool = True
 
+    # 健康检查配置
+    health_check_enabled: bool = True
+    health_check_timeout: int = 5  # 秒
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

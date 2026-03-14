@@ -30,27 +30,53 @@ class TestUserAPI:
         """测试新增用户"""
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            params = {
+            json_data = {
                 "username": "test_user_123",
                 "password": "TestPassword123!",
                 "description": "测试用户"
             }
-            params.update(get_token_params())
+            params = get_token_params()
 
-            response = await client.post("/user/create", params=params)
+            response = await client.post("/user/create", params=params, json=json_data)
             print(f"新增用户响应: {response.status_code}")
             print(f"响应内容: {response.json()}")
             assert response.status_code in [200, 201]  # 根据实际API调整
+
+    @pytest.mark.asyncio
+    async def test_create_duplicate_user(self):
+        """测试重复创建用户（应该返回 409 Conflict）"""
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # 第一次创建用户
+            json_data = {
+                "username": "test_duplicate_user",
+                "password": "TestPassword123!",
+                "description": "测试重复创建"
+            }
+            params = get_token_params()
+
+            response = await client.post("/user/create", params=params, json=json_data)
+            print(f"第一次创建用户响应: {response.status_code}")
+            assert response.status_code in [200, 201]
+
+            # 第二次创建相同用户（应该返回 409）
+            response = await client.post("/user/create", params=params, json=json_data)
+            print(f"第二次创建用户响应: {response.status_code}")
+            print(f"响应内容: {response.json()}")
+            assert response.status_code == 409  # Conflict
+
+            # 清理：删除测试用户
+            await client.post("/user/delete", params=params, json={"username": "test_duplicate_user"})
 
     @pytest.mark.asyncio
     async def test_enable_user(self):
         """测试启用用户"""
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            params = {"username": "test_user_123"}
-            params.update(get_token_params())
+            json_data = {"username": "test_user_123"}
+            params = get_token_params()
 
-            response = await client.post("/user/enable", params=params)
+            response = await client.post("/user/enable", params=params, json=json_data)
             print(f"启用用户响应: {response.status_code}")
             print(f"响应内容: {response.json()}")
             assert response.status_code == 200
@@ -71,10 +97,10 @@ class TestUserAPI:
         """测试删除用户"""
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            params = {"username": "test_user_123"}
-            params.update(get_token_params())
+            json_data = {"username": "test_user_123"}
+            params = get_token_params()
 
-            response = await client.post("/user/delete", params=params)
+            response = await client.post("/user/delete", params=params, json=json_data)
             print(f"删除用户响应: {response.status_code}")
             print(f"响应内容: {response.json()}")
             assert response.status_code == 200
@@ -268,6 +294,18 @@ class TestHealthCheck:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/health")
             print(f"健康检查响应: {response.status_code}")
+            print(f"健康检查内容: {response.json()}")
+            assert response.status_code == 200
+
+            # 验证返回的数据结构
+            data = response.json()
+            assert "status" in data
+            assert "services" in data
+            assert isinstance(data["services"], dict)
+
+            # 验证至少有一个服务状态
+            if len(data["services"]) > 0:
+                print(f"服务状态: {data['services']}")
             assert response.status_code == 200
 
 
@@ -284,21 +322,19 @@ class TestIntegration:
 
             # 1. 创建用户
             print("\n=== 步骤1: 创建用户 ===")
-            params = {
+            json_data = {
                 "username": "integration_test_user",
                 "password": "TestPass123!",
                 "description": "集成测试用户"
             }
-            params.update(token_params)
-            user_response = await client.post("/user/create", params=params)
+            user_response = await client.post("/user/create", params=token_params, json=json_data)
             print(f"创建用户: {user_response.status_code} - {user_response.json()}")
             assert user_response.status_code in [200, 201]
 
             # 2. 启用用户
             print("\n=== 步骤2: 启用用户 ===")
-            params = {"username": "integration_test_user"}
-            params.update(token_params)
-            enable_response = await client.post("/user/enable", params=params)
+            json_data = {"username": "integration_test_user"}
+            enable_response = await client.post("/user/enable", params=token_params, json=json_data)
             print(f"启用用户: {enable_response.status_code} - {enable_response.json()}")
             assert enable_response.status_code == 200
 
@@ -340,9 +376,8 @@ class TestIntegration:
 
             # 6. 删除用户
             print("\n=== 步骤6: 删除用户 ===")
-            params = {"username": "integration_test_user"}
-            params.update(token_params)
-            delete_response = await client.post("/user/delete", params=params)
+            json_data = {"username": "integration_test_user"}
+            delete_response = await client.post("/user/delete", params=token_params, json=json_data)
             print(f"删除用户: {delete_response.status_code} - {delete_response.json()}")
             assert delete_response.status_code == 200
 

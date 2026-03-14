@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Response, Depends, Form
 from synology_api.filestation import FileStation
+from synology_api.exceptions import SynoConnectionError, LoginError
 from .config import settings
 from .auth import require_token_auth
 
@@ -15,6 +16,13 @@ file_router = APIRouter(
 # 全局 FileStation 实例（单例）
 _nas_instance = None
 
+
+def reset_nas_client():
+    """重置 FileStation 客户端"""
+    global _nas_instance
+    _nas_instance = None
+
+
 def get_nas_client():
     """获取或创建 FileStation 客户端"""
     global _nas_instance
@@ -26,6 +34,7 @@ def get_nas_client():
             settings.nas_password
         )
     return _nas_instance
+
 
 @file_router.post("/upload")
 async def upload(
@@ -87,6 +96,42 @@ async def upload(
                 "dest_path": dest_path,
                 "result": result
             }
+    except (SynoConnectionError, LoginError):
+        # 连接失效，重置客户端并重试一次
+        reset_nas_client()
+        nas = get_nas_client()
+        try:
+            # 重新尝试上传
+            result = nas.upload_file(
+                dest_path=dest_path,
+                file_path=temp_file_path,
+                create_parents=True,
+                overwrite=True
+            )
+
+            if isinstance(result, dict) and result.get('success'):
+                return {
+                    "success": True,
+                    "message": "上传成功",
+                    "filename": filename,
+                    "dest_path": dest_path,
+                    "result": result
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "上传可能失败，请检查",
+                    "filename": filename,
+                    "dest_path": dest_path,
+                    "result": result
+                }
+        except Exception as retry_error:
+            return {
+                "success": False,
+                "message": f"连接已失效，重试失败: {str(retry_error)}",
+                "filename": filename,
+                "dest_path": dest_path
+            }
     except Exception as e:
         return {
             "success": False,
@@ -103,6 +148,7 @@ async def upload(
                 os.rmdir(temp_dir)
         except:
             pass
+
 
 @file_router.get("/download/{file_path:path}")
 async def download(file_path: str, nas: FileStation = Depends(get_nas_client)):
@@ -175,6 +221,63 @@ async def download(file_path: str, nas: FileStation = Depends(get_nas_client)):
 
         return Response(content=file_content, media_type=media_type)
 
+    except (SynoConnectionError, LoginError):
+        # 连接失效，重置客户端并重试一次
+        reset_nas_client()
+        nas = get_nas_client()
+        try:
+            # 重新尝试下载
+            result = nas.get_file(
+                path=file_path,
+                mode="download",
+                dest_path=temp_dir
+            )
+
+            if result is not None:
+                return Response(
+                    content=f"下载失败: {result}".encode('utf-8'),
+                    status_code=500,
+                    media_type="text/plain"
+                )
+
+            # 重新读取文件
+            if not os.path.exists(temp_file_path):
+                files = os.listdir(temp_dir)
+                if files:
+                    temp_file_path = os.path.join(temp_dir, files[0])
+                else:
+                    return Response(
+                        content=f"下载后找不到文件".encode('utf-8'),
+                        status_code=404,
+                        media_type="text/plain"
+                    )
+
+            with open(temp_file_path, 'rb') as f:
+                file_content = f.read()
+
+            suffix = Path(file_path).suffix.lower()
+            mime_types = {
+                ".txt": "text/plain; charset=utf-8",
+                ".pdf": "application/pdf",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".png": "image/png",
+                ".gif": "image/gif",
+                ".mp4": "video/mp4",
+                ".mp3": "audio/mpeg",
+                ".zip": "application/zip",
+                ".doc": "application/msword",
+                ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            }
+            media_type = mime_types.get(suffix, "application/octet-stream")
+
+            return Response(content=file_content, media_type=media_type)
+        except Exception as retry_error:
+            return Response(
+                content=f"连接已失效，重试失败: {str(retry_error)}".encode('utf-8'),
+                status_code=500,
+                media_type="text/plain"
+            )
     except Exception as e:
         return Response(
             content=f"下载失败: {str(e)}".encode('utf-8'),

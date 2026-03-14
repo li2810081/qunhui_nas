@@ -1,8 +1,6 @@
 services:
-  nas-api:
-    image: qunhuinas:latest
-    ports:
-      - "${PORT:-8000}:8000"
+  api:
+    image: 192.168.2.251:5000/qunhuiinas:latest
     environment:
       - TOKEN=${TOKEN}
       - DSM_HOST=${DSM_HOST:-127.0.0.1}
@@ -10,6 +8,36 @@ services:
       - DSM_PORT=${DSM_PORT:-5000}
       - DSM_HTTPS=${DSM_HTTPS:-true}
       - NAS_PASSWORD=${NAS_PASSWORD}
+      # 健康检查配置
+      - HEALTH_CHECK_ENABLED=true
+      - HEALTH_CHECK_TIMEOUT=5
     restart: unless-stopped
+    network_mode: host
 
+    # 方案 1: Docker 内置健康检查（推荐）
+    healthcheck:
+      interval: 5m      # 每5分钟检查一次
+      timeout: 10s      # 超时时间10秒
+      retries: 3        # 连续失败3次才认为不健康
+      start_period: 30s # 容器启动后30秒才开始检查
+      test:
+        - "CMD"
+        - "curl"
+        - "-f"
+        - "http://localhost:8000/health"
 
+  # 方案 2: 独立心跳服务（可选，用于更精细的控制）
+  # heartbeat:
+  #   image: curlimages/curl:latest
+  #   network_mode: host
+  #   restart: unless-stopped
+  #   command: >
+  #     sh -c "
+  #     while true; do
+  #       curl -s http://localhost:8000/health > /dev/null 2>&1 || true;
+  #       sleep 300;
+  #     done
+  #     "
+  #   depends_on:
+  #     api:
+  #       condition: service_healthy

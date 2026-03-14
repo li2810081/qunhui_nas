@@ -165,22 +165,39 @@ GET /user/list?token=YOUR_TOKEN
 #### 2. 创建用户
 ```http
 POST /user/create?token=YOUR_TOKEN
-Content-Type: application/x-www-form-urlencoded
+Content-Type: application/json
+```
+
+**请求体：**
+```json
+{
+  "username": "newuser",
+  "password": "SecurePass123!",
+  "description": "新用户"
+}
 ```
 
 **参数：**
 | 参数 | 类型 | 必需 | 说明 |
 |:---|:---:|:---:|:---|
-| username | string | ✅ | 用户名 |
-| password | string | ✅ | 密码 |
-| description | string | ❌ | 用户描述 |
+| username | string | ✅ | 用户名（1-32字符） |
+| password | string | ✅ | 密码（1-32字符） |
+| description | string | ✅ | 用户描述（1-32字符） |
+
+**响应：**
+- **200/201**: 创建成功
+- **409 Conflict**: 用户已存在
+- **400**: 创建失败（参数错误或其他原因）
 
 **示例：**
 ```bash
 curl -X POST "http://localhost:8000/user/create?token=YOUR_TOKEN" \
-  -d "username=newuser" \
-  -d "password=SecurePass123!" \
-  -d "description=新用户"
+  -H "Content-Type: application/json" \
+  -d '{"username":"newuser","password":"SecurePass123!","description":"新用户"}'
+
+# 用户已存在的响应示例
+# HTTP 409 Conflict
+# {"detail":"用户 'newuser' 已存在"}
 ```
 
 #### 3. 启用/禁用用户
@@ -373,6 +390,40 @@ curl -X POST "http://localhost:8000/search/file?token=YOUR_TOKEN" \
 | **性能** | 适合快速搜索 | 适合精确过滤 |
 | **搜索模式** | 同步 | 异步任务 |
 | **推荐场景** | 简单关键词搜索 | 复杂条件过滤 |
+
+### 系统监控 API
+
+#### 健康检查
+```http
+GET /health
+```
+
+**响应示例：**
+```json
+{
+  "status": "ok",
+  "services": {
+    "filestation": "ok",
+    "user": "ok",
+    "search": "ok"
+  }
+}
+```
+
+**状态说明：**
+- `ok`: 所有服务正常
+- `degraded`: 部分服务异常
+- `down`: 所有服务不可用
+
+**用途：**
+- 监控 NAS 连接状态
+- 定期调用可保持会话活跃（避免超时）
+- 容器健康检查（Docker HEALTHCHECK）
+
+**示例：**
+```bash
+curl "http://localhost:8000/health"
+```
 
 ## 🧪 测试
 
