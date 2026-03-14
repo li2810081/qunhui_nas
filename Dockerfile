@@ -30,8 +30,6 @@ COPY . .
 EXPOSE 8000
 
 # 健康检查 - 每5分钟检查一次，超时时间10秒
-HEALTHCHECK --interval=5m --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
+HEALTHCHECK --interval=1m --timeout=10s CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 # 启动命令
 CMD ["uv", "run", "main.py"]
