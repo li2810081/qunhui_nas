@@ -7,6 +7,8 @@ from fastapi.routing import APIRouter
 from fastapi import Depends, HTTPException
 from typing import Dict
 from pydantic import BaseModel, Field
+import threading
+import logging
 
 user_router = APIRouter(
     prefix="/user",
@@ -14,47 +16,120 @@ user_router = APIRouter(
     dependencies=[Depends(require_token_auth)]  # 全局应用 Token 鉴权
 )
 
+# 日志记录器
+logger = logging.getLogger(__name__)
+
 # 全局实例（单例）
 _user_instance = None
 _group_instance = None
 
+# 线程锁，防止竞态条件
+_user_lock = threading.Lock()
+_group_lock = threading.Lock()
+
 
 def reset_user_client():
-    """重置 User 客户端"""
+    """完全重置 User 客户端和共享会话"""
     global _user_instance
-    _user_instance = None
+    from synology_api.base_api import BaseApi
+
+    with _user_lock:
+        if _user_instance is not None:
+            try:
+                _user_instance.logout()
+                logger.info("旧会话已登出")
+            except Exception as e:
+                logger.warning(f"登出时出错(可忽略): {e}")
+
+        _user_instance = None
+        BaseApi.shared_session = None
+        logger.warning("User 客户端和共享会话已重置")
 
 
 def reset_group_client():
-    """重置 Group 客户端"""
+    """完全重置 Group 客户端和共享会话"""
     global _group_instance
-    _group_instance = None
+    from synology_api.base_api import BaseApi
+
+    with _group_lock:
+        if _group_instance is not None:
+            try:
+                _group_instance.logout()
+                logger.info("Group 旧会话已登出")
+            except Exception as e:
+                logger.warning(f"Group 登出时出错(可忽略): {e}")
+
+        _group_instance = None
+        BaseApi.shared_session = None
+        logger.warning("Group 客户端和共享会话已重置")
 
 
 def get_user_client() -> User:
-    """获取或创建 User 客户端"""
+    """获取或创建 User 客户端,验证会话完整性和可用性"""
     global _user_instance
-    if _user_instance is None:
-        _user_instance = User(
-            settings.dsm_host,
-            settings.dsm_port,
-            settings.nas_user,
-            settings.nas_password
-        )
-    return _user_instance
+    from synology_api.base_api import BaseApi
+
+    with _user_lock:
+        # 如果实例不存在,创建新的
+        if _user_instance is None:
+            logger.info("创建新的 User 客户端")
+            _user_instance = User(
+                settings.dsm_host,
+                settings.dsm_port,
+                settings.nas_user,
+                settings.nas_password
+            )
+            logger.info(f"User 客户端创建成功, SID: {_user_instance._sid}, API 数量: {len(_user_instance.core_list)}")
+
+        # 验证核心 API 是否已加载
+        if 'SYNO.Core.User' not in _user_instance.core_list:
+            logger.warning("核心 API SYNO.Core.User 未加载,重置客户端")
+            _user_instance = None
+            BaseApi.shared_session = None
+            _user_instance = User(
+                settings.dsm_host,
+                settings.dsm_port,
+                settings.nas_user,
+                settings.nas_password
+            )
+            logger.info(f"User 客户端重建成功, SID: {_user_instance._sid}, API 数量: {len(_user_instance.core_list)}")
+
+        logger.debug(f"User 客户端就绪, SID: {_user_instance._sid}, API 数量: {len(_user_instance.core_list)}")
+        return _user_instance
 
 
 def get_group_client() -> Group:
-    """获取或创建 Group 客户端"""
+    """获取或创建 Group 客户端,验证会话完整性和可用性"""
     global _group_instance
-    if _group_instance is None:
-        _group_instance = Group(
-            settings.dsm_host,
-            settings.dsm_port,
-            settings.nas_user,
-            settings.nas_password
-        )
-    return _group_instance
+    from synology_api.base_api import BaseApi
+
+    with _group_lock:
+        # 如果实例不存在,创建新的
+        if _group_instance is None:
+            logger.info("创建新的 Group 客户端")
+            _group_instance = Group(
+                settings.dsm_host,
+                settings.dsm_port,
+                settings.nas_user,
+                settings.nas_password
+            )
+            logger.info(f"Group 客户端创建成功, SID: {_group_instance._sid}, API 数量: {len(_group_instance.core_list)}")
+
+        # 验证核心 API 是否已加载
+        if 'SYNO.Core.Group' not in _group_instance.core_list:
+            logger.warning("核心 API SYNO.Core.Group 未加载,重置客户端")
+            _group_instance = None
+            BaseApi.shared_session = None
+            _group_instance = Group(
+                settings.dsm_host,
+                settings.dsm_port,
+                settings.nas_user,
+                settings.nas_password
+            )
+            logger.info(f"Group 客户端重建成功, SID: {_group_instance._sid}, API 数量: {len(_group_instance.core_list)}")
+
+        logger.debug(f"Group 客户端就绪, SID: {_group_instance._sid}, API 数量: {len(_group_instance.core_list)}")
+        return _group_instance
 
 
 def _user_exists(user_client: User, username: str) -> bool:
@@ -104,21 +179,31 @@ async def list_users() -> Dict:
     Returns:
         Dict: 用户列表，包含所有系统用户的信息
     """
-    user_client = get_user_client()
-
     try:
-        return user_client.get_users()
-    except (SynoConnectionError, LoginError):
-        # 连接失效，重置并重试
-        reset_user_client()
         user_client = get_user_client()
+        return user_client.get_users()
+    except KeyError as e:
+        # KeyError 表示 API 未正确加载,完全重置
+        logger.error(f"API KeyError: {e},重置客户端")
+        reset_user_client()
+        # 重试一次
         try:
+            user_client = get_user_client()
             return user_client.get_users()
         except Exception as retry_error:
+            logger.error(f"重试失败: {retry_error}")
             raise HTTPException(
                 status_code=500,
-                detail=f"连接失败，请检查 NAS 配置: {str(retry_error)}"
+                detail=f"服务暂时不可用,请稍后重试: {str(retry_error)}"
             )
+    except (SynoConnectionError, LoginError) as e:
+        # 连接或认证失败
+        logger.error(f"连接/认证失败: {e}")
+        reset_user_client()
+        raise HTTPException(
+            status_code=500,
+            detail=f"NAS 连接失败,请检查配置: {str(e)}"
+        )
 
 
 @user_router.post("/create")
@@ -137,16 +222,16 @@ async def create_user(user_info: UserInfo) -> Dict:
     Raises:
         HTTPException: 用户已存在时返回 409 Conflict
     """
-    user_client = get_user_client()
-
-    # 检查用户是否已存在
-    if _user_exists(user_client, user_info.username):
-        raise HTTPException(
-            status_code=409,  # 409 Conflict
-            detail=f"用户 '{user_info.username}' 已存在"
-        )
-
     try:
+        user_client = get_user_client()
+
+        # 检查用户是否已存在
+        if _user_exists(user_client, user_info.username):
+            raise HTTPException(
+                status_code=409,  # 409 Conflict
+                detail=f"用户 '{user_info.username}' 已存在"
+            )
+
         result = user_client.create_user(
             name=user_info.username,
             password=user_info.password,
@@ -177,11 +262,13 @@ async def create_user(user_info: UserInfo) -> Dict:
     except HTTPException:
         # 重新抛出 HTTP 异常
         raise
-    except (SynoConnectionError, LoginError):
-        # 连接失效，重置并重试
+    except KeyError as e:
+        # KeyError 表示 API 未正确加载,完全重置
+        logger.error(f"API KeyError: {e},重置客户端")
         reset_user_client()
-        user_client = get_user_client()
+        # 重试一次
         try:
+            user_client = get_user_client()
             # 重试前再次检查用户是否存在
             if _user_exists(user_client, user_info.username):
                 raise HTTPException(
@@ -215,10 +302,19 @@ async def create_user(user_info: UserInfo) -> Dict:
         except HTTPException:
             raise
         except Exception as retry_error:
+            logger.error(f"重试失败: {retry_error}")
             raise HTTPException(
                 status_code=500,
-                detail=f"连接失败，请检查 NAS 配置: {str(retry_error)}"
+                detail=f"服务暂时不可用,请稍后重试: {str(retry_error)}"
             )
+    except (SynoConnectionError, LoginError) as e:
+        # 连接或认证失败
+        logger.error(f"连接/认证失败: {e}")
+        reset_user_client()
+        raise HTTPException(
+            status_code=500,
+            detail=f"NAS 连接失败,请检查配置: {str(e)}"
+        )
     except SynoBaseException as e:
         raise HTTPException(
             status_code=500,
@@ -239,29 +335,39 @@ async def enable_user(user_modify_info: UserModifyInfo) -> Dict:
     Returns:
         Dict: 操作结果
     """
-    user_client = get_user_client()
-
     try:
+        user_client = get_user_client()
         return user_client.modify_user(
             user_modify_info.username,
             user_modify_info.username,
             expire="normal"
         )
-    except (SynoConnectionError, LoginError):
-        # 连接失效，重置并重试
+    except KeyError as e:
+        # KeyError 表示 API 未正确加载,完全重置
+        logger.error(f"API KeyError: {e},重置客户端")
         reset_user_client()
-        user_client = get_user_client()
+        # 重试一次
         try:
+            user_client = get_user_client()
             return user_client.modify_user(
                 user_modify_info.username,
                 user_modify_info.username,
                 expire="normal"
             )
         except Exception as retry_error:
+            logger.error(f"重试失败: {retry_error}")
             raise HTTPException(
                 status_code=500,
-                detail=f"连接失败，请检查 NAS 配置: {str(retry_error)}"
+                detail=f"服务暂时不可用,请稍后重试: {str(retry_error)}"
             )
+    except (SynoConnectionError, LoginError) as e:
+        # 连接或认证失败
+        logger.error(f"连接/认证失败: {e}")
+        reset_user_client()
+        raise HTTPException(
+            status_code=500,
+            detail=f"NAS 连接失败,请检查配置: {str(e)}"
+        )
 
 
 @user_router.post("/disable")
@@ -277,29 +383,39 @@ async def disable_user(user_modify_info: UserModifyInfo) -> Dict:
     Returns:
         Dict: 操作结果
     """
-    user_client = get_user_client()
-
     try:
+        user_client = get_user_client()
         return user_client.modify_user(
             user_modify_info.username,
             user_modify_info.username,
             expire="now"
         )
-    except (SynoConnectionError, LoginError):
-        # 连接失效，重置并重试
+    except KeyError as e:
+        # KeyError 表示 API 未正确加载,完全重置
+        logger.error(f"API KeyError: {e},重置客户端")
         reset_user_client()
-        user_client = get_user_client()
+        # 重试一次
         try:
+            user_client = get_user_client()
             return user_client.modify_user(
                 user_modify_info.username,
                 user_modify_info.username,
                 expire="now"
             )
         except Exception as retry_error:
+            logger.error(f"重试失败: {retry_error}")
             raise HTTPException(
                 status_code=500,
-                detail=f"连接失败，请检查 NAS 配置: {str(retry_error)}"
+                detail=f"服务暂时不可用,请稍后重试: {str(retry_error)}"
             )
+    except (SynoConnectionError, LoginError) as e:
+        # 连接或认证失败
+        logger.error(f"连接/认证失败: {e}")
+        reset_user_client()
+        raise HTTPException(
+            status_code=500,
+            detail=f"NAS 连接失败,请检查配置: {str(e)}"
+        )
 
 
 @user_router.post("/delete")
@@ -315,21 +431,31 @@ async def delete_user(user_modify_info: UserModifyInfo) -> Dict:
     Returns:
         Dict: 操作结果
     """
-    user_client = get_user_client()
-
     try:
-        return user_client.delete_user(user_modify_info.username)
-    except (SynoConnectionError, LoginError):
-        # 连接失效，重置并重试
-        reset_user_client()
         user_client = get_user_client()
+        return user_client.delete_user(user_modify_info.username)
+    except KeyError as e:
+        # KeyError 表示 API 未正确加载,完全重置
+        logger.error(f"API KeyError: {e},重置客户端")
+        reset_user_client()
+        # 重试一次
         try:
+            user_client = get_user_client()
             return user_client.delete_user(user_modify_info.username)
         except Exception as retry_error:
+            logger.error(f"重试失败: {retry_error}")
             raise HTTPException(
                 status_code=500,
-                detail=f"连接失败，请检查 NAS 配置: {str(retry_error)}"
+                detail=f"服务暂时不可用,请稍后重试: {str(retry_error)}"
             )
+    except (SynoConnectionError, LoginError) as e:
+        # 连接或认证失败
+        logger.error(f"连接/认证失败: {e}")
+        reset_user_client()
+        raise HTTPException(
+            status_code=500,
+            detail=f"NAS 连接失败,请检查配置: {str(e)}"
+        )
 
 
 @user_router.post("/add_to_group")
@@ -345,24 +471,34 @@ async def add_user_to_group(user_group_info: UserGroupInfo) -> Dict:
     Returns:
         Dict: 操作结果
     """
-    group_client = get_group_client()
-
     try:
+        group_client = get_group_client()
         return group_client.add_users(
             user_group_info.groupname,
             [user_group_info.username]
         )
-    except (SynoConnectionError, LoginError):
-        # 连接失效，重置并重试
+    except KeyError as e:
+        # KeyError 表示 API 未正确加载,完全重置
+        logger.error(f"API KeyError: {e},重置 Group 客户端")
         reset_group_client()
-        group_client = get_group_client()
+        # 重试一次
         try:
+            group_client = get_group_client()
             return group_client.add_users(
                 user_group_info.groupname,
                 [user_group_info.username]
             )
         except Exception as retry_error:
+            logger.error(f"重试失败: {retry_error}")
             raise HTTPException(
                 status_code=500,
-                detail=f"连接失败，请检查 NAS 配置: {str(retry_error)}"
+                detail=f"服务暂时不可用,请稍后重试: {str(retry_error)}"
             )
+    except (SynoConnectionError, LoginError) as e:
+        # 连接或认证失败
+        logger.error(f"连接/认证失败: {e}")
+        reset_group_client()
+        raise HTTPException(
+            status_code=500,
+            detail=f"NAS 连接失败,请检查配置: {str(e)}"
+        )

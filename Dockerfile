@@ -2,7 +2,7 @@
 FROM python:3.13-slim
 
 # 安装 uv（使用官方推荐的方式）
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.m.daocloud.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # 安装 curl（用于健康检查）
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
