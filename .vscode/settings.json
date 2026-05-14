@@ -7,5 +7,5 @@
         "**/Thumbs.db": true
     },
     "hide-files.files": [],
-    "python.languageServer": "Pylance"
+    "python.languageServer": "None"
 }

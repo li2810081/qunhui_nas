@@ -112,6 +112,9 @@ async def health_check() -> Dict[str, Any]:
 
     return health_status
 
+from fastapi_mcp import FastApiMCP
+mcp = FastApiMCP(app)
+mcp.mount_http()
 
 if __name__ == "__main__":
     import uvicorn
